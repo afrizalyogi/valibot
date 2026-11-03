@@ -5,6 +5,7 @@ All notable changes to the library will be documented in this file.
 ## vX.X.X (Month DD, YYYY)
 
 - Add translations for `partialCheckAsync`, `rawCheckAsync` and `rawTransformAsync` actions (pull request #1645)
+- Change `exports` in `package.json` to one subpath pattern per language to reduce its size from about 900 KB to 17 KB and speed up module resolution (issue #1730)
 
 ## v1.3.0 (September 13, 2026)
 
