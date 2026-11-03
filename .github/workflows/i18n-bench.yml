@@ -1,0 +1,130 @@
+name: i18n exports verify + bench (temporary, not for upstream)
+
+on:
+  push:
+    branches: ['ci-*']
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  ci:
+    permissions:
+      contents: read
+      pull-requests: write
+    uses: ./.github/workflows/ci.yml
+
+  bench:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        node: [22, 24, 26]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - uses: ./.github/actions/environment
+      - name: Install hyperfine
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq hyperfine
+      - name: Repo build (pnpm build, all packages except website)
+        run: pnpm build
+      - name: i18n lint (tsc)
+        run: pnpm lint
+        working-directory: packages/i18n
+      - name: Prettier check changed files
+        run: pnpm exec prettier --write packages/i18n/scripts packages/i18n/CHANGELOG.md .github/workflows/ci.yml && git diff --exit-code
+
+      - name: Build OLD (upstream main build script)
+        working-directory: packages/i18n
+        run: |
+          git show d72f76fc:packages/i18n/scripts/build-npm.ts > scripts/build-npm-old.ts
+          git show d72f76fc:packages/i18n/package.json > package.json
+          npx tsm ./scripts/build-npm-old.ts
+          cp package.json /tmp/old-package.json
+          npm pack --pack-destination /tmp >/dev/null && mv /tmp/valibot-i18n-*.tgz /tmp/old.tgz
+          rm scripts/build-npm-old.ts
+          git checkout -- package.json
+      - name: check-exports against OLD build (expected to FAIL)
+        working-directory: packages/i18n
+        run: |
+          cp /tmp/old-package.json package.json
+          if npx tsm ./scripts/check-exports.ts; then echo "::error::old build unexpectedly passed"; exit 1; else echo "old build fails as expected"; fi
+          git checkout -- package.json
+      - name: Build NEW
+        working-directory: packages/i18n
+        run: |
+          pnpm build.npm
+          diff <(git show HEAD:packages/i18n/package.json | jq -S .) <(jq -S . package.json) && echo "committed package.json matches build output"
+          cp package.json /tmp/new-package.json
+          npm pack --pack-destination /tmp >/dev/null && mv /tmp/valibot-i18n-*.tgz /tmp/new.tgz
+      - name: check-exports NEW (generated files)
+        run: pnpm check.exports
+        working-directory: packages/i18n
+      - name: check-exports NEW against every OLD subpath
+        run: pnpm check.exports /tmp/old-package.json
+        working-directory: packages/i18n
+
+      - uses: actions/setup-node@48b55a011bda9f5d6aeb4c2d9c7362e8dae4041e # v6.4.0
+        with:
+          node-version: ${{ matrix.node }}
+      - name: Install packed tarballs into clean projects
+        run: |
+          node --version
+          for v in old new; do
+            mkdir -p /tmp/bench-$v && cd /tmp/bench-$v
+            echo '{"name":"bench","private":true,"type":"module"}' > package.json
+            npm install --silent --no-audit --no-fund valibot@1.5.0 /tmp/$v.tgz
+            cd -
+          done
+          ls -l /tmp/old-package.json /tmp/new-package.json /tmp/bench-*/node_modules/@valibot/i18n/package.json
+      - name: Resolve all OLD subpaths from installed NEW package (import + require)
+        working-directory: /tmp/bench-new
+        run: |
+          node --input-type=module -e "
+          import fs from 'node:fs'; import { createRequire } from 'node:module';
+          const req = createRequire(process.cwd() + '/x.cjs');
+          const old = Object.keys(JSON.parse(fs.readFileSync('/tmp/old-package.json','utf8')).exports);
+          let n = 0;
+          for (const k of old) { const s = '@valibot/i18n' + k.slice(1); import.meta.resolve(s); req.resolve(s); n++; }
+          await import('@valibot/i18n'); req('@valibot/i18n');
+          console.log('resolved', n, 'subpaths x2 + loaded root ESM/CJS');"
+      - name: In-process timing (issue snippet, 15 runs each, median)
+        run: |
+          cat > /tmp/t.mjs <<'EOF'
+          const s = performance.now();
+          await import('@valibot/i18n/ru');
+          await import('@valibot/i18n/de');
+          console.log(Math.round(performance.now() - s));
+          EOF
+          cat > /tmp/t-all.mjs <<'EOF'
+          const s = performance.now();
+          await import('@valibot/i18n');
+          console.log(Math.round(performance.now() - s));
+          EOF
+          cat > /tmp/t.cjs <<'EOF'
+          const s = performance.now();
+          require('@valibot/i18n/ru'); require('@valibot/i18n/de');
+          console.log(Math.round(performance.now() - s));
+          EOF
+          for f in t.mjs t-all.mjs t.cjs; do for v in old new; do
+            cp /tmp/$f /tmp/bench-$v/$f
+            r=$(cd /tmp/bench-$v && for i in $(seq 15); do node $f; done | sort -n | awk '{a[NR]=$1} END{print a[int((NR+1)/2)]}')
+            echo "BENCH node=${{ matrix.node }} $f $v median_ms=$r" | tee -a /tmp/bench.txt
+          done; done
+      - name: hyperfine (whole process)
+        run: |
+          cd /tmp
+          hyperfine -N --warmup 2 --runs 15 --export-markdown /tmp/hf.md \
+            -n 'old ru+de ESM' "node /tmp/bench-old/t.mjs" \
+            -n 'new ru+de ESM' "node /tmp/bench-new/t.mjs" \
+            -n 'old root ESM (all langs)' "node /tmp/bench-old/t-all.mjs" \
+            -n 'new root ESM (all langs)' "node /tmp/bench-new/t-all.mjs" \
+            -n 'old ru+de CJS' "node /tmp/bench-old/t.cjs" \
+            -n 'new ru+de CJS' "node /tmp/bench-new/t.cjs"
+          cat /tmp/hf.md
+          stat -c 'SIZE %n %s' /tmp/old-package.json /tmp/new-package.json | tee -a /tmp/bench.txt
+          ls -l /tmp/old.tgz /tmp/new.tgz | tee -a /tmp/bench.txt
+          { echo '```'; cat /tmp/bench.txt; echo '```'; cat /tmp/hf.md; } >> "$GITHUB_STEP_SUMMARY"
