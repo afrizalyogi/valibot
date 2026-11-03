@@ -83,14 +83,22 @@ jobs:
       - name: Resolve all OLD subpaths from installed NEW package (import + require)
         working-directory: /tmp/bench-new
         run: |
-          node --input-type=module -e "
-          import fs from 'node:fs'; import { createRequire } from 'node:module';
+          cat > resolve.mjs <<'EOF'
+          import fs from 'node:fs';
+          import { createRequire } from 'node:module';
           const req = createRequire(process.cwd() + '/x.cjs');
-          const old = Object.keys(JSON.parse(fs.readFileSync('/tmp/old-package.json','utf8')).exports);
-          let n = 0;
-          for (const k of old) { const s = '@valibot/i18n' + k.slice(1); import.meta.resolve(s); req.resolve(s); n++; }
-          await import('@valibot/i18n'); req('@valibot/i18n');
-          console.log('resolved', n, 'subpaths x2 + loaded root ESM/CJS');"
+          const old = Object.keys(JSON.parse(fs.readFileSync('/tmp/old-package.json', 'utf8')).exports);
+          let ok = 0; const bad = [];
+          for (const k of old) {
+            const s = k === '.' ? '@valibot/i18n' : '@valibot/i18n' + k.slice(1);
+            try { import.meta.resolve(s); req.resolve(s); ok++; } catch (e) { bad.push(s + ': ' + e.message.split('\n')[0]); }
+          }
+          try { await import('@valibot/i18n'); } catch (e) { bad.push('import root: ' + e.message.split('\n')[0]); }
+          try { req('@valibot/i18n'); } catch (e) { bad.push('require root: ' + e.message.split('\n')[0]); }
+          if (bad.length) { console.log(`::error::${bad.length} failures, first: ${bad.slice(0, 3).join(' | ')}`); process.exit(1); }
+          console.log(`::notice::node ${process.version}: resolved ${ok}/${old.length} old subpaths (import+require) from installed new tarball; root ESM+CJS loaded`);
+          EOF
+          node resolve.mjs
       - name: In-process timing (issue snippet, 15 runs each, median)
         run: |
           cat > /tmp/t.mjs <<'EOF'
@@ -113,11 +121,12 @@ jobs:
             cp /tmp/$f /tmp/bench-$v/$f
             r=$(cd /tmp/bench-$v && for i in $(seq 15); do node $f; done | sort -n | awk '{a[NR]=$1} END{print a[int((NR+1)/2)]}')
             echo "BENCH node=${{ matrix.node }} $f $v median_ms=$r" | tee -a /tmp/bench.txt
+            echo "::notice::BENCH node=${{ matrix.node }} $f $v median_ms=$r"
           done; done
       - name: hyperfine (whole process)
         run: |
           cd /tmp
-          hyperfine -N --warmup 2 --runs 15 --export-markdown /tmp/hf.md \
+          hyperfine -N --warmup 2 --runs 15 --export-markdown /tmp/hf.md --export-json /tmp/hf.json \
             -n 'old ru+de ESM' "node /tmp/bench-old/t.mjs" \
             -n 'new ru+de ESM' "node /tmp/bench-new/t.mjs" \
             -n 'old root ESM (all langs)' "node /tmp/bench-old/t-all.mjs" \
@@ -125,6 +134,9 @@ jobs:
             -n 'old ru+de CJS' "node /tmp/bench-old/t.cjs" \
             -n 'new ru+de CJS' "node /tmp/bench-new/t.cjs"
           cat /tmp/hf.md
+          jq -r '.results[] | "::notice::HF node=${{ matrix.node }} \(.command) mean_ms=\(.mean*1000|round) median_ms=\(.median*1000|round) sd_ms=\(.stddev*1000|round)"' /tmp/hf.json
+          stat -c '::notice::SIZE %n %s' /tmp/old-package.json /tmp/new-package.json /tmp/old.tgz /tmp/new.tgz
+          for v in old new; do jq -r --arg v $v '"::notice::KEYS \($v) \(.exports|length)"' /tmp/$v-package.json; done
           stat -c 'SIZE %n %s' /tmp/old-package.json /tmp/new-package.json | tee -a /tmp/bench.txt
           ls -l /tmp/old.tgz /tmp/new.tgz | tee -a /tmp/bench.txt
           { echo '```'; cat /tmp/bench.txt; echo '```'; cat /tmp/hf.md; } >> "$GITHUB_STEP_SUMMARY"
