@@ -147,6 +147,8 @@ jobs:
       - name: Check CommonJS build
         run: pnpm check.cjs
         working-directory: packages/i18n
+      - name: TEMP i18n lint + prettier
+        run: pnpm --dir packages/i18n lint && pnpm exec prettier --check packages/i18n/scripts packages/i18n/package.json packages/i18n/CHANGELOG.md .github/workflows/ci.yml
 
   website_prettier:
     name: Run Prettier in website
