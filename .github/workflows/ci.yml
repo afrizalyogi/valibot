@@ -130,6 +130,24 @@ jobs:
         run: pnpm test
         working-directory: packages/to-json-schema
 
+  i18n_cjs:
+    name: Check CommonJS build in packages/i18n
+    needs: install
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Setup environment
+        uses: ./.github/actions/environment
+      - name: Build i18n
+        run: pnpm build.npm
+        working-directory: packages/i18n
+      - name: Check CommonJS build
+        run: pnpm check.cjs
+        working-directory: packages/i18n
+
   website_prettier:
     name: Run Prettier in website
     needs: install

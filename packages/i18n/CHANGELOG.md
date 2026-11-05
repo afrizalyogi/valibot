@@ -5,6 +5,7 @@ All notable changes to the library will be documented in this file.
 ## vX.X.X (Month DD, YYYY)
 
 - Add translations for `partialCheckAsync`, `rawCheckAsync` and `rawTransformAsync` actions (pull request #1645)
+- Fix `SyntaxError` when requiring the CommonJS root entry point, caused by hyphens in the `zh-CN` and `zh-TW` variable names
 
 ## v1.3.0 (September 13, 2026)
 
