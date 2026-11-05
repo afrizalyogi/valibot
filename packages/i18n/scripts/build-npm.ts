@@ -148,7 +148,7 @@ for (const language of languages) {
   // Add index imports to root index files
   rootModuleImports.push(`import "@valibot/i18n/${language.code}";`);
   rootCommonImports.push(
-    `var import_${language.code.replaceAll('-', '_')} = require("@valibot/i18n/${language.code}");`
+    `var import_${language.code} = require("@valibot/i18n/${language.code}");`
   );
 
   // Create language import variables
